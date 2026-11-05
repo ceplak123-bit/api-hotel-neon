@@ -1,0 +1,50 @@
+import { neon } from '@neondatabase/serverless';
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  const sql = neon(process.env.DATABASE_URL);
+
+  try {
+    const params = req.method === 'POST' ? req.body : req.query;
+    const { action, table, data } = params;
+
+    if (action === 'read') {
+      const allowed = ['brokers', 'customers', 'bookings', 'invoices', 'payments'];
+      if (!allowed.includes(table)) throw new Error('Tabel tidak valid');
+      const rows = await sql(`SELECT * FROM ${table} ORDER BY created_at DESC`);
+      return res.status(200).json({ status: 'success', data: rows });
+    }
+
+    if (action === 'insert') {
+      const keys = Object.keys(data);
+      const values = Object.values(data);
+      const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+      const query = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING *`;
+      const result = await sql(query, values);
+      return res.status(200).json({ status: 'success', data: result[0] });
+    }
+
+    if (action === 'update') {
+      const { id, ...updates } = data;
+      const keys = Object.keys(updates);
+      const values = Object.values(updates);
+      const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const query = `UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1}`;
+      await sql(query, [...values, id]);
+      return res.status(200).json({ status: 'success' });
+    }
+
+    if (action === 'delete') {
+      await sql(`DELETE FROM ${table} WHERE id = $1`, [data.id]);
+      return res.status(200).json({ status: 'success' });
+    }
+
+    throw new Error('Action tidak dikenal');
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+}
